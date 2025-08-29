@@ -15,7 +15,7 @@ function isSameOrigin(url, base) {
   }
 }
 
-export async function crawlWithPuppeteer(startUrl, { outDir, maxPages = 20, concurrency = 2, onProgress } = {}) {
+export async function crawlWithPuppeteer(startUrl, { outDir, maxPages = 20, concurrency = 1, onProgress } = {}) {
   const browser = await puppeteer.launch({ headless: 'true' });
   const visited = new Set();
   const queue = [startUrl];
@@ -30,7 +30,6 @@ export async function crawlWithPuppeteer(startUrl, { outDir, maxPages = 20, conc
       const html = await page.content();
       const contentType = await page.evaluate(() => document.contentType || 'text/html');
       pages.push({ url, contentType, body: Buffer.from(html, 'utf8') });
-
       // Extract and queue internal links
       const links = await page.$$eval('a[href]', as =>
         as.map(a => a.href).filter(href => !!href)
@@ -41,13 +40,12 @@ export async function crawlWithPuppeteer(startUrl, { outDir, maxPages = 20, conc
         }
       }
 
-      // (Optional: Download assets as before...)
-
       if (onProgress) {
         onProgress({ phase: 'crawl', pageCount: visited.size, url, total: maxPages });
       }
     } catch (e) {
       logger.error('Puppeteer page error:', e);
+      throw e;
     } finally {
       await page.close();
     }

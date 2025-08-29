@@ -1,13 +1,22 @@
 import * as cheerio from 'cheerio';
 
 // Helper to rewrite URLs
-function rewriteUrl(url, pageUrl, basePrefix) {
+function rewriteUrl(url, pageUrl, snapshotPrefix) {
   if (!url) return url;
+  // If the URL starts with the snapshot prefix, rewrite to _/...
+  if (url.startsWith(snapshotPrefix)) {
+    return '_/' + url.slice(snapshotPrefix.length);
+  }
+  // If it's a same-origin absolute path, rewrite to _/...
   try {
     const u = new URL(url, pageUrl);
-    // Only rewrite same-origin URLs
-    if (u.origin === new URL(pageUrl).origin) {
-      return basePrefix + u.pathname.replace(/^\//, '');
+    const pageBase = new URL(pageUrl);
+    if (u.origin === pageBase.origin && u.pathname.startsWith(snapshotPrefix)) {
+      return '_/' + u.pathname.slice(snapshotPrefix.length) + u.search + u.hash;
+    }
+    if (u.origin === pageBase.origin && u.pathname.startsWith('/')) {
+      // Remove leading slash and add _/
+      return '_/' + u.pathname.slice(1) + u.search + u.hash;
     }
     return url;
   } catch {

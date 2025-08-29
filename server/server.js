@@ -21,6 +21,9 @@ const SNAPROOT = path.join(DATA, 'snapshots');
 
 const progressClients = new Map();
 
+
+
+
 app.get('/api/progress/:id', (req, res) => {
   const { id } = req.params;
   res.set({
@@ -46,7 +49,9 @@ app.get('/snapshots/:host/:ts/index.html', (req, res, next) => {
   }
 });
 
+
 app.use('/snapshots', express.static(SNAPROOT, { fallthrough: true }));
+
 
 // Health Checks
 app.get('/api/health', (req, res) => res.json({ ok: true }));
@@ -95,7 +100,7 @@ app.post('/api/archive', async (req, res) => {
     if (!/localhost|127\.0\.0\.1/.test(url)) {
         logger.info('Starting Puppeteer crawl...');
         try {
-        pages = await crawlWithPuppeteer(url, { outDir: dir, maxPages, concurrency: 3, onProgress });
+        pages = await crawlWithPuppeteer(url, { outDir: dir, maxPages, concurrency: 1, onProgress });
         } catch (e) {
         logger.warn('Puppeteer crawl failed, falling back to same-origin.', { error: e });
         logger.info('Starting same-origin crawl...');
