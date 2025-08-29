@@ -1,4 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react'
+import ArchiveProgress from './ArchieveProgress.jsx';
+
+
+function genProgressId() {
+  return (window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`);
+}
 
 async function api(path, opts) {
   const r = await fetch(path, opts)
@@ -14,7 +20,33 @@ export default function App() {
   const [selected, setSelected] = useState(null)
   const [compareA, setCompareA] = useState('')
   const [compareB, setCompareB] = useState('')
-  const [maxPages, setMaxPages] = useState(40)
+  const [maxPages, setMaxPages] = useState(10)
+  const [error, setError] = useState('')
+  const [progressId, setProgressId] = useState(null);
+
+  async function archiveNow() {
+    setError('');
+    if (maxPages < 1 || maxPages > 20) {
+      setError('Max pages must be between 1 and 20.');
+      return;
+    }
+    setLoading(true);
+    const pid = genProgressId();
+    setProgressId(pid);
+    try {
+      const r = await api('/api/archive', { 
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify({ url, maxPages, progressId: pid }) 
+      });
+      setHost(r.host);
+      await refresh();
+      setSelected(r.ts);
+    } finally {
+      setLoading(false);
+      setTimeout(() => setProgressId(null), 2000); 
+    }
+  }
 
   const base = useMemo(() => selected ? `/snapshots/${host}/${selected}/` : null, [host, selected])
   console.log('base', base);
@@ -29,86 +61,128 @@ export default function App() {
   }
 
 
-    async function archiveNow() {
-    setLoading(true)
-    try {
-        const r = await api('/api/archive', { 
-        method: 'POST', 
-        headers: { 'Content-Type': 'application/json' }, 
-        body: JSON.stringify({ url, maxPages }) 
-        })
-        setHost(r.host)
-        await refresh()  // <-- call refresh after archiving
-        setSelected(r.ts)
-    } finally { setLoading(false) }
-    }
-
-// Optional: manual refresh button
-<button onClick={refresh}>Refresh list</button>
-
-
-  return (
-    <div className="wrap">
-      <aside className="sidebar">
-        <h2>Wayback-Lite</h2>
-        <div className="row">
-          <input value={url} onChange={e=>setUrl(e.target.value)} style={{flex:1}} placeholder="https://…" />
-        </div>
-        <div className="row" style={{marginTop:8}}>
-          <button onClick={archiveNow} disabled={loading}>{loading ? 'Archiving…' : 'Archive now'}</button>
-          <button onClick={refresh}>Refresh list</button>
-        </div>
-        <div style={{marginTop:8}}>
-          <label>Max pages: </label>
-          <input type="number" min={1} max={500} value={maxPages} onChange={e=>setMaxPages(+e.target.value)} style={{width:90}} />
-        </div>
-
-        <h3 style={{marginTop:16}}>Snapshots</h3>
-        {!snapshots.length && <div className="muted">No snapshots yet. Create one!</div>}
-        <ul>
-          {snapshots.map(ts => (
-            <li key={ts}>
-              <label>
-                <input type="radio" name="snapshot" checked={selected===ts} onChange={()=>setSelected(ts)} />{' '}
-                <span className="badge">{ts.slice(0,8)} {ts.slice(8,12)}</span>{' '}
-                <span className="muted">{ts}</span>
-              </label>
-            </li>
-          ))}
-        </ul>
-
-        {snapshots.length >= 2 && (
-          <div style={{marginTop:12}}>
-            <h3>Compare</h3>
-            <div>
-              <select value={compareA} onChange={e=>setCompareA(e.target.value)}>
-                <option value="">Choose A</option>
-                {snapshots.map(ts => <option key={'A'+ts} value={ts}>{ts}</option>)}
-              </select>
-            </div>
-            <div style={{marginTop:6}}>
-              <select value={compareB} onChange={e=>setCompareB(e.target.value)}>
-                <option value="">Choose B</option>
-                {snapshots.map(ts => <option key={'B'+ts} value={ts}>{ts}</option>)}
-              </select>
-            </div>
-            {compareA && compareB && (
-              <DiffView host={host} a={compareA} b={compareB} />
+    return (
+      <div className="app-root">
+        <header className="topbar">
+          <span role="img" aria-label="archive" style={{fontSize: '2.2rem'}}>🗄️</span>
+          <span style={{fontWeight: 700, marginLeft: 8}}>Wayback-Lite</span>
+          <span style={{fontSize: '1rem', color: '#388e3c', fontWeight: 400, marginLeft: 16}}>
+            Your personal web time machine
+          </span>
+        </header>
+        <div className="dashboard-content">
+          <aside className="sidebar">
+            {error && (
+              <div style={{
+                color: '#c62828',
+                background: '#fff3f3',
+                borderRadius: 6,
+                padding: 8,
+                marginBottom: 12,
+                fontWeight: 500,
+                border: '1px solid #ffcdd2'
+              }}>
+                {error}
+              </div>
             )}
-          </div>
-        )}
-      </aside>
-
-      <main className="main">
-        <h3>Snapshot Viewer</h3>
-        {base ? (
-          <iframe src={`/snapshots/${host}/${selected}/index.html`} title="snapshot" />
-        ) : (
-          <div className="muted">Select a snapshot to view.</div>
-        )}
-      </main>
-    </div>
-  )
+            {progressId && <ArchiveProgress progressId={progressId} />}
+            <div className="row" style={{marginBottom: 12}}>
+              <input
+                value={url}
+                onChange={e => setUrl(e.target.value)}
+                style={{flex: 1}}
+                placeholder="https://…"
+              />
+            </div>
+            <div className="row" style={{marginBottom: 12}}>
+              <button onClick={archiveNow} disabled={loading}>
+                {loading ? 'Archiving…' : 'Archive now'}
+              </button>
+              <button onClick={refresh}>Refresh list</button>
+            </div>
+            <div className="row" style={{marginBottom: 16}}>
+              <label>Max pages:</label>
+              <input
+                type="number"
+                min={1}
+                max={20}
+                value={maxPages}
+                onChange={e => setMaxPages(+e.target.value)}
+                style={{width: 90}}
+              />
+            </div>
+            <h3 style={{marginTop: 16}}>Snapshots</h3>
+            {!snapshots.length && (
+              <div className="muted">No snapshots yet. Create one!</div>
+            )}
+            <ul style={{paddingLeft: 0, listStyle: 'none', marginBottom: 16}}>
+              {snapshots.map(ts => (
+                <li key={ts} style={{marginBottom: 4}}>
+                  <label>
+                    <input
+                      type="radio"
+                      name="snapshot"
+                      checked={selected === ts}
+                      onChange={() => setSelected(ts)}
+                    />{' '}
+                    <span className="badge">{ts.slice(0, 8)} {ts.slice(8, 12)}</span>{' '}
+                    <span className="muted">{ts}</span>
+                  </label>
+                </li>
+              ))}
+            </ul>
+            {snapshots.length >= 2 && (
+              <div style={{marginTop: 12}}>
+                <h3>Compare</h3>
+                <div className="row" style={{marginBottom: 6}}>
+                  <select value={compareA} onChange={e => setCompareA(e.target.value)}>
+                    <option value="">Choose A</option>
+                    {snapshots.map(ts => (
+                      <option key={'A' + ts} value={ts}>{ts}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="row">
+                  <select value={compareB} onChange={e => setCompareB(e.target.value)}>
+                    <option value="">Choose B</option>
+                    {snapshots.map(ts => (
+                      <option key={'B' + ts} value={ts}>{ts}</option>
+                    ))}
+                  </select>
+                </div>
+                {compareA && compareB && (
+                  <DiffView host={host} a={compareA} b={compareB} />
+                )}
+              </div>
+            )}
+            <footer style={{
+              marginTop: 'auto',
+              fontSize: '0.95em',
+              color: '#bbb',
+              textAlign: 'center'
+            }}>
+            </footer>
+          </aside>
+          <main className="main">
+            <h3>Snapshot Viewer</h3>
+            {base ? (
+              <iframe
+                src={`/snapshots/${host}/${selected}/index.html`}
+                title="snapshot"
+                style={{
+                  width: '100%',
+                  minHeight: 600,
+                  border: 'none',
+                  borderRadius: 8
+                }}
+              />
+            ) : (
+              <div className="muted">Select a snapshot to view.</div>
+            )}
+          </main>
+        </div>
+      </div>
+    )
 }
 
 function DiffView({ host, a, b }) {

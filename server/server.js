@@ -18,6 +18,24 @@ app.use(serverTiming());
 const DATA = path.join(__dirname, '..', 'data');
 const SNAPROOT = path.join(DATA, 'snapshots');
 
+
+const progressClients = new Map();
+
+app.get('/api/progress/:id', (req, res) => {
+  const { id } = req.params;
+  res.set({
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+  });
+  res.flushHeaders();
+  progressClients.set(id, res);
+
+  req.on('close', () => {
+    progressClients.delete(id);
+  });
+});
+
 app.get('/snapshots/:host/:ts/index.html', (req, res, next) => {
   const { host, ts } = req.params;
   const filePath = path.join(SNAPROOT, host, ts, '_', 'index.html');
