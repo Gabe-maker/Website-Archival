@@ -17,13 +17,16 @@ export function isSameOrigin(a, b) {
   return ua.host === ub.host && ua.protocol === ub.protocol;
 }
 
-export function normalizePathForDisk(u) {
-  // Convert a URL path to a safe file path
-  const url = new URL(u);
-  let p = url.pathname;
-  if (!p || p.endsWith('/')) p += 'index.html';
-  const safe = p.split('/').map(seg => sanitize(seg) || '_').join('/');
-  return safe;
+export function normalizePathForDisk(url) {
+  const u = new URL(url);
+  let pathname = u.pathname;
+  if (pathname === '/' || pathname === '') {
+    return '_/index.html';
+  }
+  if (pathname.endsWith('/')) {
+    return `_${pathname}index.html`;
+  }
+  return `_${pathname}`;
 }
 
 export function isAsset(href) {

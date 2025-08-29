@@ -8,6 +8,8 @@ import { __dirname, toHost, normalizePathForDisk } from './utils.js';
 import { crawlSameOrigin } from './crawler.js';
 import { rewriteHtmlToLocal } from './rewrite.js';
 import { createSnapshotRoot, saveAsset, listSnapshotsByUrl, recordCapture, getManifest } from './snapshot.js';
+import { crawlWithPuppeteer } from './crawler-puppet.js';
+import logger from './logger.js';
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -36,10 +38,11 @@ app.get('/api/archives', async (req, res) => {
 try {
 const { url } = req.query;
 if (!url) return res.status(400).json({ error: 'url is required' });
-const list = await listSnapshotsByUrl(url);
-res.json({ host: toHost(url), snapshots: list });
+    const list = await listSnapshotsByUrl(url);
+    res.json({ host: toHost(url), snapshots: list });
 } catch (e) {
-res.status(500).json({ error: e.message });
+    logger.error('Failed to archive', { error: e, url });
+    res.status(500).json({ error: e.message });
 }
 });
 
@@ -48,35 +51,103 @@ res.json(await getManifest());
 });
 
 app.post('/api/archive', async (req, res) => {
-const { url, maxPages = 100 } = req.body || {};
-if (!url) return res.status(400).json({ error: 'url is required' });
-const ts = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0,14); // YYYYMMDDHHmmss
-const { dir, host } = await createSnapshotRoot(url, ts);
-const tsBasePrefix = `/snapshots/${host}/${ts}/`;
+  const { url, maxPages = 10, usePuppeteer = true, progressId } = req.body || {};
+  logger.info(`Received archive request for url=${url} maxPages=${maxPages} usePuppeteer=${usePuppeteer}`);
+  if (!url) {
+    logger.warn('No URL provided to /api/archive');
+    return res.status(400).json({ error: 'url is required' });
+  }
+  const ts = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0,14);
+  const { dir, host } = await createSnapshotRoot(url, ts);
+  const tsBasePrefix = `/snapshots/${host}/${ts}/`;
 
+   let pages = await crawlWithPuppeteer(url, {
+    outDir: dir,
+    maxPages,
+    onProgress: info => {
+        if (progressId && progressClients.has(progressId)) {
+        progressClients.get(progressId).write(
+            `data: ${JSON.stringify(info)}\n\n`
+        );
+        }
+    }
+    });
+    let pageCount = 0;
+    try {
+    if (!/localhost|127\.0\.0\.1/.test(url)) {
+        logger.info('Starting Puppeteer crawl...');
+        try {
+        pages = await crawlWithPuppeteer(url, { outDir: dir, maxPages, concurrency: 3, onProgress });
+        } catch (e) {
+        logger.warn('Puppeteer crawl failed, falling back to same-origin.', { error: e });
+        logger.info('Starting same-origin crawl...');
+        pages = await crawlSameOrigin(url, { maxPages });
+        }
+    } else {
+        logger.info('Starting same-origin crawl...');
+        pages = await crawlSameOrigin(url, { maxPages });
+    }
+    logger.info(`Crawl complete. Pages found: ${pages.length}`);
+    } catch (e) {
+    logger.error('Crawler failed', { error: e });
+    return res.status(500).json({ error: e.message });
+    }
 
-const pages = await crawlSameOrigin(url, { maxPages });
+  const total = pages.length;
 
-
-// Save assets & rewrite HTML locally
+  // Save assets & rewrite HTML locally
 for (const p of pages) {
-const rel = normalizePathForDisk(p.url);
-const outPath = path.join(dir, rel);
-await fs.ensureDir(path.dirname(outPath));
-
-
-if (/text\/html/i.test(p.contentType)) {
-const html = p.body.toString('utf8');
-const rewritten = rewriteHtmlToLocal(html, p.url, tsBasePrefix);
-await fs.writeFile(outPath, rewritten);
-} else {
-await fs.writeFile(outPath, p.body);
+  logger.debug(`Saving: ${p.url} -> ${normalizePathForDisk(p.url)}`);
+  const rel = normalizePathForDisk(p.url);
+  const outPath = path.join(dir, rel);
+  await fs.ensureDir(path.dirname(outPath));
+  if (/text\/html/i.test(p.contentType)) {
+    const html = p.body.toString('utf8');
+    const rewritten = rewriteHtmlToLocal(html, p.url, tsBasePrefix);
+    await fs.writeFile(outPath, rewritten);
+    logger.info(`Saved HTML: ${outPath}`);
+  } else {
+    await fs.writeFile(outPath, p.body);
+    logger.info(`Saved asset: ${outPath}`);
+  }
+  pageCount++;
+  if (progressId && progressClients.has(progressId)) {
+    progressClients.get(progressId).write(
+      `data: ${JSON.stringify({ phase: 'save', pageCount, total, url: p.url })}\n\n`
+    );
+  }
 }
+if (pages.length > 0) {
+  // The first page is the main page requested by the user
+  const mainPageUrl = pages[0].url;
+  const mainRel = normalizePathForDisk(mainPageUrl);
+  const mainPath = path.join(dir, mainRel);
+
+  // Always copy to _/index.html if not already there
+  const underscoreIndex = path.join(dir, '_', 'index.html');
+  if (mainPath !== underscoreIndex && await fs.pathExists(mainPath)) {
+    await fs.ensureDir(path.dirname(underscoreIndex));
+    await fs.copyFile(mainPath, underscoreIndex);
+    logger.info(`Copied main page to: ${underscoreIndex}`);
+  }
+
+  // Always copy to index.html at the root
+  const rootIndex = path.join(dir, 'index.html');
+  if (await fs.pathExists(mainPath)) {
+    await fs.copyFile(mainPath, rootIndex);
+    logger.info(`Copied main page to snapshot root: ${rootIndex}`);
+  }
+}
+const mainIndex = path.join(dir, '_', 'index.html');
+const rootIndex = path.join(dir, 'index.html');
+if (await fs.pathExists(mainIndex)) {
+  await fs.copyFile(mainIndex, rootIndex);
+  logger.info(`Copied main index to snapshot root: ${rootIndex}`);
 }
 
-
-await recordCapture(url, ts);
-res.json({ host, ts, base: tsBasePrefix, count: pages.length });
+  await recordCapture(url, ts);
+  logger.info(`Archive complete for ${url} at ts=${ts}`);
+  res.json({ host, ts, base: tsBasePrefix, count: pages.length });
 });
 
 // Simple raw HTML fetch for diffing convenience
@@ -100,4 +171,4 @@ res.status(404).send('Snapshot index not found');
 
 
 const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => console.log(`Wayback-Lite server running http://localhost:${PORT}`));
+app.listen(PORT, () => logger.info(`Wayback-Lite server running http://localhost:${PORT}`));

@@ -1,44 +1,72 @@
-import { JSDOM } from 'jsdom';
-import { isAsset, normalizePathForDisk } from './utils.js';
+import * as cheerio from 'cheerio';
 
-
-export function rewriteHtmlToLocal(html, baseUrl, tsBasePrefix) {
-// tsBasePrefix: `/snapshots/<host>/<ts>/` for serving locally
-const dom = new JSDOM(html);
-const doc = dom.window.document;
-
-
-const attrs = [
-['a','href'], ['img','src'], ['link','href'], ['script','src'], ['source','src'], ['video','poster']
-];
-
-
-for (const [tag, attr] of attrs) {
-doc.querySelectorAll(`${tag}[${attr}]`).forEach(el => {
-const val = el.getAttribute(attr);
-try {
-const abs = new URL(val, baseUrl).toString();
-const localPath = normalizePathForDisk(abs);
-const newHref = `${tsBasePrefix}${localPath}`;
-// For navigation links, keep same-origin only; otherwise leave absolute
-if (tag === 'a' && !isAsset(abs)) {
-el.setAttribute(attr, newHref);
-} else if (isAsset(abs)) {
-el.setAttribute(attr, newHref);
-}
-} catch(e) {}
-});
+// Helper to rewrite URLs
+function rewriteUrl(url, pageUrl, basePrefix) {
+  if (!url) return url;
+  try {
+    const u = new URL(url, pageUrl);
+    // Only rewrite same-origin URLs
+    if (u.origin === new URL(pageUrl).origin) {
+      return basePrefix + u.pathname.replace(/^\//, '');
+    }
+    return url;
+  } catch {
+    return url;
+  }
 }
 
-
-// Add banner so users know it's a snapshot
-const banner = doc.createElement('div');
-banner.textContent = `Snapshot of ${baseUrl}`;
-banner.setAttribute('style','position:fixed;top:0;left:0;right:0;background:#111;color:#fff;padding:6px;z-index:99999;font:12px/1.2 system-ui');
-doc.body.prepend(banner);
-const spacer = doc.createElement('div'); spacer.style.height = '26px';
-doc.body.prepend(spacer);
-
-
-return dom.serialize();
+// Helper to rewrite CSS url() references
+function rewriteCssUrls(css, pageUrl, basePrefix) {
+  return css.replace(/url\((['"]?)([^'")]+)\1\)/g, (match, quote, assetUrl) => {
+    const rewritten = rewriteUrl(assetUrl, pageUrl, basePrefix);
+    return `url(${quote}${rewritten}${quote})`;
+  });
 }
+
+export function rewriteHtmlToLocal(html, pageUrl, basePrefix) {
+  const $ = cheerio.load(html);
+
+  // Rewrite asset URLs in tags
+  $('img').each((_, el) => {
+    const src = $(el).attr('src');
+    $(el).attr('src', rewriteUrl(src, pageUrl, basePrefix));
+    const srcset = $(el).attr('srcset');
+    if (srcset) {
+      // Rewrite each srcset entry
+      const rewritten = srcset.split(',').map(entry => {
+        const [url, size] = entry.trim().split(/\s+/, 2);
+        return [rewriteUrl(url, pageUrl, basePrefix), size].filter(Boolean).join(' ');
+      }).join(', ');
+      $(el).attr('srcset', rewritten);
+    }
+  });
+
+  $('link').each((_, el) => {
+    const href = $(el).attr('href');
+    $(el).attr('href', rewriteUrl(href, pageUrl, basePrefix));
+  });
+
+  $('script').each((_, el) => {
+    const src = $(el).attr('src');
+    if (src) $(el).attr('src', rewriteUrl(src, pageUrl, basePrefix));
+  });
+
+  $('a').each((_, el) => {
+    const href = $(el).attr('href');
+    if (href && !href.startsWith('#')) $(el).attr('href', rewriteUrl(href, pageUrl, basePrefix));
+  });
+
+  // Rewrite inline style attributes
+  $('[style]').each((_, el) => {
+    const style = $(el).attr('style');
+    if (style) $(el).attr('style', rewriteCssUrls(style, pageUrl, basePrefix));
+  });
+
+  // Rewrite <style> tag contents
+  $('style').each((_, el) => {
+    const style = $(el).html();
+    if (style) $(el).html(rewriteCssUrls(style, pageUrl, basePrefix));
+  });
+
+    return $.html();
+  }
