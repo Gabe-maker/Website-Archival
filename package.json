@@ -1,0 +1,24 @@
+{
+  "name": "website-archival",
+  "version": "1.0.0",
+  "description": "Website-Archival is a modern, open-source web archiving tool that lets you capture, browse, and compare snapshots of any website. It is designed for ease of use, transparency, and extensibility—perfect for researchers, developers, or anyone who wants to preserve and explore web content over time.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Gabe-maker/Website-Archival.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Gabe-maker/Website-Archival/issues"
+  },
+  "homepage": "https://github.com/Gabe-maker/Website-Archival#readme",
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
