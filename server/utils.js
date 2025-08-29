@@ -21,12 +21,13 @@ export function normalizePathForDisk(url) {
   const u = new URL(url);
   let pathname = u.pathname;
   if (pathname === '/' || pathname === '') {
-    return '_/index.html';
+    return 'index.html';
   }
   if (pathname.endsWith('/')) {
-    return `_${pathname}index.html`;
+    return `${pathname}index.html`;
   }
-  return `_${pathname}`;
+  // Remove leading slash for disk paths
+  return pathname.startsWith('/') ? pathname.slice(1) : pathname;
 }
 
 export function isAsset(href) {

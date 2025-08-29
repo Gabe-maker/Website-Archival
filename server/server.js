@@ -17,7 +17,11 @@ app.use(serverTiming());
 
 const DATA = path.join(__dirname, '..', 'data');
 const SNAPROOT = path.join(DATA, 'snapshots');
-
+await fs.ensureDir(DATA);
+const manifestPath = path.join(DATA, 'manifest.json');
+if (!await fs.pathExists(manifestPath)) {
+  await fs.writeFile(manifestPath, '{}', 'utf8');
+}
 
 const progressClients = new Map();
 
@@ -37,16 +41,6 @@ app.get('/api/progress/:id', (req, res) => {
   req.on('close', () => {
     progressClients.delete(id);
   });
-});
-
-app.get('/snapshots/:host/:ts/index.html', (req, res, next) => {
-  const { host, ts } = req.params;
-  const filePath = path.join(SNAPROOT, host, ts, '_', 'index.html');
-  if (fs.existsSync(filePath)) {
-    res.sendFile(filePath);
-  } else {
-    next();
-  }
 });
 
 
@@ -84,89 +78,113 @@ app.post('/api/archive', async (req, res) => {
   const { dir, host } = await createSnapshotRoot(url, ts);
   const tsBasePrefix = `/snapshots/${host}/${ts}/`;
 
-   let pages = await crawlWithPuppeteer(url, {
-    outDir: dir,
-    maxPages,
-    onProgress: info => {
-        if (progressId && progressClients.has(progressId)) {
-        progressClients.get(progressId).write(
-            `data: ${JSON.stringify(info)}\n\n`
-        );
-        }
-    }
-    });
-    let pageCount = 0;
+  let pages;
+  let pageCount = 0;
+  try {
+    logger.info('Trying same-origin crawl...');
     try {
-    if (!/localhost|127\.0\.0\.1/.test(url)) {
-        logger.info('Starting Puppeteer crawl...');
-        try {
-        pages = await crawlWithPuppeteer(url, { outDir: dir, maxPages, concurrency: 1, onProgress });
-        } catch (e) {
-        logger.warn('Puppeteer crawl failed, falling back to same-origin.', { error: e });
-        logger.info('Starting same-origin crawl...');
-        pages = await crawlSameOrigin(url, { maxPages });
+      pages = await crawlSameOrigin(url, { maxPages });
+    } catch (e) {
+      logger.warn('Same-origin crawl failed, falling back to Puppeteer.', e);
+      logger.info('Trying Puppeteer crawl...');
+      pages = await crawlWithPuppeteer(url, {
+        outDir: dir,
+        maxPages,
+        concurrency: 1,
+        onProgress: info => {
+          if (progressId && progressClients.has(progressId)) {
+            progressClients.get(progressId).write(
+              `data: ${JSON.stringify(info)}\n\n`
+            );
+          }
         }
-    } else {
-        logger.info('Starting same-origin crawl...');
-        pages = await crawlSameOrigin(url, { maxPages });
+      });
     }
     logger.info(`Crawl complete. Pages found: ${pages.length}`);
-    } catch (e) {
+  } catch (e) {
     logger.error('Crawler failed', { error: e });
     return res.status(500).json({ error: e.message });
-    }
+  }
 
   const total = pages.length;
 
   // Save assets & rewrite HTML locally
-for (const p of pages) {
-  logger.debug(`Saving: ${p.url} -> ${normalizePathForDisk(p.url)}`);
-  const rel = normalizePathForDisk(p.url);
-  const outPath = path.join(dir, rel);
-  await fs.ensureDir(path.dirname(outPath));
-  if (/text\/html/i.test(p.contentType)) {
-    const html = p.body.toString('utf8');
-    const rewritten = rewriteHtmlToLocal(html, p.url, tsBasePrefix);
-    await fs.writeFile(outPath, rewritten);
-    logger.info(`Saved HTML: ${outPath}`);
-  } else {
-    await fs.writeFile(outPath, p.body);
-    logger.info(`Saved asset: ${outPath}`);
-  }
-  pageCount++;
-  if (progressId && progressClients.has(progressId)) {
-    progressClients.get(progressId).write(
-      `data: ${JSON.stringify({ phase: 'save', pageCount, total, url: p.url })}\n\n`
-    );
-  }
-}
-if (pages.length > 0) {
-  // The first page is the main page requested by the user
-  const mainPageUrl = pages[0].url;
-  const mainRel = normalizePathForDisk(mainPageUrl);
-  const mainPath = path.join(dir, mainRel);
+  for (const p of pages) {
+    logger.debug(`Saving: ${p.url} -> ${normalizePathForDisk(p.url)}`);
 
-  // Always copy to _/index.html if not already there
-  const underscoreIndex = path.join(dir, '_', 'index.html');
-  if (mainPath !== underscoreIndex && await fs.pathExists(mainPath)) {
-    await fs.ensureDir(path.dirname(underscoreIndex));
-    await fs.copyFile(mainPath, underscoreIndex);
-    logger.info(`Copied main page to: ${underscoreIndex}`);
+    const isHtml = /text\/html/i.test(p.contentType);
+    let rel = normalizePathForDisk(p.url);
+
+    let outPath;
+    if (isHtml) {
+      rel = rel.replace(/\/$/, '');
+      // If rel ends with 'index.html', save as .../index.html (not .../index.html/index.html)
+      if (rel.endsWith('index.html')) {
+        outPath = path.join(dir, rel);
+      } else {
+        outPath = path.join(dir, rel, 'index.html');
+      }
+    } else {
+      outPath = path.join(dir, rel);
+    }
+    const outDir = path.dirname(outPath);
+
+    // --- Handle file/dir collision for outDir ---
+    if (await fs.pathExists(outDir)) {
+      const stat = await fs.stat(outDir);
+      if (stat.isFile()) {
+        await fs.remove(outDir);
+      }
+    }
+    await fs.ensureDir(outDir);
+
+    // --- Handle dir/file collision for outPath ---
+    if (await fs.pathExists(outPath)) {
+      const stat = await fs.stat(outPath);
+      if (stat.isDirectory()) {
+        await fs.remove(outPath);
+      }
+    }
+
+    if (isHtml) {
+      const html = p.body.toString('utf8');
+      const rewritten = rewriteHtmlToLocal(html, p.url, tsBasePrefix);
+      await fs.writeFile(outPath, rewritten);
+      logger.info(`Saved HTML: ${outPath}`);
+    } else {
+      await fs.writeFile(outPath, p.body);
+      logger.info(`Saved asset: ${outPath}`);
+    }
+    pageCount++;
+    if (progressId && progressClients.has(progressId)) {
+      progressClients.get(progressId).write(
+        `data: ${JSON.stringify({ phase: 'save', pageCount, total, url: p.url })}\n\n`
+      );
+    }
   }
 
-  // Always copy to index.html at the root
-  const rootIndex = path.join(dir, 'index.html');
-  if (await fs.pathExists(mainPath)) {
-    await fs.copyFile(mainPath, rootIndex);
-    logger.info(`Copied main page to snapshot root: ${rootIndex}`);
+  // Save the homepage as index.html at the root of the snapshot directory
+  if (pages.length > 0) {
+    const mainPageUrl = pages[0].url;
+    const mainRel = normalizePathForDisk(mainPageUrl);
+    let mainPath;
+    if (mainRel.endsWith('index.html')) {
+      mainPath = path.join(dir, mainRel);
+    } else {
+      mainPath = path.join(dir, mainRel, 'index.html');
+    }
+    const rootIndex = path.join(dir, 'index.html');
+    if (mainPath !== rootIndex && await fs.pathExists(mainPath)) {
+      if (await fs.pathExists(rootIndex)) {
+        const stat = await fs.stat(rootIndex);
+        if (stat.isDirectory()) {
+          await fs.remove(rootIndex);
+        }
+      }
+      await fs.copyFile(mainPath, rootIndex);
+      logger.info(`Copied main page to snapshot root: ${rootIndex}`);
+    }
   }
-}
-const mainIndex = path.join(dir, '_', 'index.html');
-const rootIndex = path.join(dir, 'index.html');
-if (await fs.pathExists(mainIndex)) {
-  await fs.copyFile(mainIndex, rootIndex);
-  logger.info(`Copied main index to snapshot root: ${rootIndex}`);
-}
 
   await recordCapture(url, ts);
   logger.info(`Archive complete for ${url} at ts=${ts}`);
