@@ -1,8 +1,6 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs-extra';
-import axios from 'axios';
-import { v4 as uuidv4 } from 'uuid';
 import serverTiming from 'server-timing';
 import { __dirname, toHost, normalizePathForDisk } from './utils.js';
 import { crawlSameOrigin } from './crawler.js';
@@ -25,9 +23,6 @@ if (!await fs.pathExists(manifestPath)) {
 
 const progressClients = new Map();
 
-
-
-
 app.get('/api/progress/:id', (req, res) => {
   const { id } = req.params;
   res.set({
@@ -46,16 +41,30 @@ app.get('/api/progress/:id', (req, res) => {
 
 app.use('/snapshots', express.static(SNAPROOT, { fallthrough: true }));
 
+// Custom 404 for snapshots
+app.use('/snapshots', (req, res) => {
+  res.status(404).send(`
+    <html>
+      <body style="background:#fef2f2;">
+        <div id="SNAPSHOT_NOT_FOUND" style="text-align:center;margin-top:10vh;">
+          <h1 style="color:#b91c1c;">404 Snapshot Not Found</h1>
+          <p>The requested snapshot does not exist.</p>
+        </div>
+      </body>
+    </html>
+  `);
+});
 
 // Health Checks
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
-
+// List snapshots for a URL
 app.get('/api/archives', async (req, res) => {
 try {
 const { url } = req.query;
 if (!url) return res.status(400).json({ error: 'url is required' });
     const list = await listSnapshotsByUrl(url);
+    logger.debug('List snapshots', { url, list });
     res.json({ host: toHost(url), snapshots: list });
 } catch (e) {
     logger.error('Failed to archive', { error: e, url });
@@ -63,10 +72,12 @@ if (!url) return res.status(400).json({ error: 'url is required' });
 }
 });
 
+// Get manifest
 app.get('/api/manifest', async (req, res) => {
 res.json(await getManifest());
 });
 
+// Archieves a URL and saves pages locally to data/snapshots/<host>/<timestamp>/
 app.post('/api/archive', async (req, res) => {
   const { url, maxPages = 10, usePuppeteer = true, progressId } = req.body || {};
   logger.info(`Received archive request for url=${url} maxPages=${maxPages} usePuppeteer=${usePuppeteer}`);

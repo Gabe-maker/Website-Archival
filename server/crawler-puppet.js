@@ -1,8 +1,4 @@
 import puppeteer from 'puppeteer';
-import path from 'path';
-import fs from 'fs-extra';
-import urlModule from 'url';
-import axios from 'axios';
 import logger from './logger.js';
 
 function isSameOrigin(url, base) {

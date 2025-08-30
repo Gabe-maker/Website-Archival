@@ -38,7 +38,7 @@ The goal of this project is to provide a **self-hosted, user-friendly web archiv
   Every archive is timestamped and listed. You can view or re-archive any site at any time.
 
 - **Snapshot Comparison:**  
-  Select two snapshots and visually compare their HTML to see what changed.
+  Select two snapshots and view any page side-by-side to compare versions.
 
 - **Progress Feedback:**  
   Real-time progress bar and status updates during crawling and saving.
@@ -139,11 +139,6 @@ The goal of this project is to provide a **self-hosted, user-friendly web archiv
 
 ---
 
-## 📄 License
-
-MIT
-
----
 
 ## 🙏 Credits
 
